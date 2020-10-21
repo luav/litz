@@ -32,7 +32,7 @@ type
   WeakSet = ref object of JsObject
   DocumentFragment = ref object of Node
   Template = ref object of Element
-    content: DocumentFragment
+    payload: DocumentFragment
 
 proc `jss`*(s: string): JSString = s.JSString
 
@@ -143,7 +143,7 @@ let
   UID: cstring = expando & genUid()
   UIDC: cstring = "<!--" & UID & "-->"
   testFragment = fragment(document)
-  hasContent = "content" in create[Template](document, "template")
+  hasContent = "payload" in create[Template](document, "template")
   hasAppend = "append" in testFragment
   hasImportNode = "importNode" in document
   shouldUseTextContent = newRegExp("""^style|textarea$""", "i")
@@ -170,19 +170,19 @@ proc htmlFragment(n: Node, h: cstring): DocumentFragment =
 
   if hasContent:
     container.innerHTML = h
-    return container.content
+    return container.payload
   else:
-    var content = fragment(n)
+    var payload = fragment(n)
 
     if newRegExp("""^[^\S]*?<(col(?:group)?|t(?:head|body|foot|r|d|h))""", "i").test(h):
       var selector = getMatch(1)
       container.innerHTML = "<table>" & h & "</table>"
-      append(content, to(slice.call(toJs(container.querySelectorAll(selector))), seq[Node]))
+      append(payload, to(toJs(container.querySelectorAll(selector)), seq[Node]))
     else:
       container.innerHTML = h
-      append(content, to(slice.call(toJs(container.childNodes)), seq[Node])) 
+      append(payload, to(toJs(container.childNodes), seq[Node]))
     
-    result = content
+    result = payload
 
 proc newMap(): JsObject =
   var
@@ -267,7 +267,7 @@ proc TL(t: JsObject): JsObject =
     ffv: float
 
   if t != nil and t.propertyIsEnumerable("raw") or
-    to(newRegExp("""Firefox\/(\d+)""").test((g.navigator or JsObject{}).userAgent) and toJs(to(toJs(getMatch(1).parseFloat()), cfloat) < 55), bool):
+    to(newRegExp("""Firefox\/(\d+)""").test((g.navigator or JsObject{}).userAgent) and toJs(to(toJs(getMatch(1)).parseFloat(), cfloat) < 55), bool):
     var 
       T = JsObject{}
       k = "^".cstring & t.join("^".cstring)
@@ -339,7 +339,7 @@ proc findAttributes(n: Node, paths: var seq[JsObject], parts: JsObject) =
   var 
     cache = newJsObject()
     attributes = toJs(n.attributes)
-    arr = slice.call(toJs(attributes))
+    arr = toJs(attributes)
     remove = toJs([])
     length = to(arr.length, cint)
     
@@ -647,7 +647,7 @@ proc setAnyContent(n: Node, childNodes: var seq[Node]): proc(v: var JsObject) =
             domdiff(
               n.parentNode,
               childNodes, 
-              to(slice.call(v.childNodes), seq[Node]),
+              to(v.childNodes, seq[Node]),
               diffOptions
             )
           else:
@@ -665,12 +665,12 @@ proc setAnyContent(n: Node, childNodes: var seq[Node]): proc(v: var JsObject) =
         var o = toJs(stringConstructor(v))
         setAnyContentInner(o)
       elif "any" in v:
-        setAnyContentInner(v.`any`)
+        var a = v.`any`
+        setAnyContentInner(a)
       elif "html" in v:
-        childNodes = domdiff(n.parentNode, childNodes, to(slice.call(toJs(createFragment(n, toJs([]).concat(v.html).join("")).childNodes)), seq[Node]), diffOptions)
+        childNodes = domdiff(n.parentNode, childNodes, to(toJs(createFragment(n, toJs([]).concat(v.html).join("")).childNodes), seq[Node]), diffOptions)
       elif "length" in v:
-        var o = slice.call(v)
-        setAnyContentInner(o)
+        setAnyContentInner(v)
       else:
         var 
           ac = setAnyContentInner
@@ -728,7 +728,7 @@ proc setAttribute(n: Node, name: cstring, og: Node): proc(nv: JsObject) =
       kind = kind.toLowerCase()
     return proc(nv: JsObject) =
       if oldValue != nv:
-        if oldValue != nil: n.removeEventListener(kind, to(oldValue, proc (ev: Event)), false)
+        if oldValue != nil: n.removeEventListener(kind, to(oldValue, proc (ev: Event)))  # , false
         oldValue = nv
         if nv != nil: n.addEventListener(kind, to(nv, proc (ev: Event)), false)
   elif name == "data" or name in n:
@@ -779,12 +779,13 @@ proc setTextContent(n: Node): proc(v: var JsObject) =
           var o = toJs(stringConstructor(v.text))
           textContent(o)
         elif "any" in v:
-          textContent(v.any)
+          var a = v.any
+          textContent(a)
         elif "html" in v:
           var o = toJs(toJs([]).concat(v.html).join(""))
           textContent(o)
         elif "length" in v:
-          var o = toJs(slice.call(v).join(""))
+          var o = toJs(v.join(""))
           textContent(o)
         else:
           var o = intent.invoke(v, textContent)
@@ -851,11 +852,11 @@ proc wireContent(n: Node): JsObject =
   
   result = if to(wireNodes.length, cint) == 1: wireNodes[0] else: jsNew(wireChildNodes(wireNodes))
 
-proc content(kind: cstring): proc(s: JsObject): JsObject =
+proc payload(kind: cstring): proc(s: JsObject): JsObject =
   var
     wire: JsObject
     container: JsObject
-    content: JsObject
+    payload: JsObject
     temp: JsObject
     updates: JsObject
 
@@ -864,12 +865,12 @@ proc content(kind: cstring): proc(s: JsObject): JsObject =
     var setup = temp != u
     if setup:
       temp = u
-      content = toJs(fragment(document))
-      container = content # TODO: SVG
+      payload = toJs(fragment(document))
+      container = payload # TODO: SVG
       updates = jsBind(toJs(renderLit), container)
     updates.apply(nil, jsarguments)
     if setup:
-      wire = wireContent(to(content, Node))
+      wire = wireContent(to(payload, Node))
     result = wire
 
 proc weakly(obj: JsObject, kind: JsObject): JsObject =
@@ -891,18 +892,18 @@ proc weakly(obj: JsObject, kind: JsObject): JsObject =
   if w[id] != nil:
     return w[id]
   else:
-    return retAssgn(w, id, content(tkind))
+    return retAssgn(w, id, payload(tkind))
 
 type
   WiredProc = proc (s: JsObject): JsObject
 
 proc wire*(obj: JsObject, kind: JsObject = nil): WiredProc {.exportc.} =
   if obj == nil:
-    result = if kind != nil: content(to(kind, cstring)) else: content("html")
+    result = if kind != nil: payload(to(kind, cstring)) else: payload("html")
   else:
     result = if kind != nil: to(weakly(obj, kind), WiredProc) else: to(weakly(obj, toJs("html")), WiredProc)
 
-proc setup(content: JsObject) =
+proc setup(payload: JsObject) =
   var
     children = newWeakMap()
     create {.nodecl, importc: "Object.create".}: proc(o: JsObject): JsObject 
@@ -932,7 +933,7 @@ proc setup(content: JsObject) =
       children.set(ctx, info)
       return info
 
-setup(toJs(content))
+setup(toJs(payload))
 
 proc bindLit*(e: Element): JsObject {.exportc.} =
   result = jsBind(toJs(renderLit), toJs(e))
